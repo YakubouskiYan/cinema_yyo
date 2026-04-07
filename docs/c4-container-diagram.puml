@@ -1,0 +1,96 @@
+@startuml CinemaAbyss_C4_Container
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title CinemaAbyss — To-Be Container Diagram (C4)
+
+' ── Внешние участники ────────────────────────────────────────────
+Person(client, "Пользователь", "Web / Mobile клиент")
+System_Ext(payment_gw, "Платёжный шлюз", "Внешний процессинг:\nStripe / ЮKassa / etc.")
+System_Ext(ingress, "Ingress (nginx)", "Kubernetes Ingress Controller.\nТерминирует TLS, маршрутизирует\nвнешний трафик на API Gateway.\nHost: cinemaabyss.example.com")
+
+' ── Платформа ────────────────────────────────────────────────────
+System_Boundary(cinema, "CinemaAbyss Platform") {
+
+    Container(gateway, "API Gateway (Proxy)", "Go · :8000",
+        "Единая точка входа.\nРеализует паттерн Strangler Fig:\nпостепенно переключает трафик\nчерез MOVIES_MIGRATION_PERCENT.")
+
+    ' Legacy
+    System_Boundary(legacy, "Legacy Domain") {
+        Container(monolith, "Monolith", "Go · :8080",
+            "Временный legacy-сервис.\nОбслуживает Users, Payments, Subscriptions\nпока домены не выделены.")
+        ContainerDb(shared_db, "Shared PostgreSQL", "PostgreSQL 14 · :5432",
+            "Общая БД монолита.\nВ целевом состоянии каждый\nсервис получит свою схему/БД.")
+    }
+
+    ' Movies Domain
+    System_Boundary(movies_domain, "Movies Domain") {
+        Container(movies_svc, "Movies Service", "Go · :8081",
+            "Метаданные фильмов:\nкаталог, жанры, рейтинги, постеры.\nПервый извлечённый микросервис.")
+        ContainerDb(movies_db, "Movies DB", "PostgreSQL 14",
+            "Таблицы: movies, movie_genres,\nuser_ratings, views")
+    }
+
+    ' Users Domain (to extract)
+    System_Boundary(users_domain, "Users Domain  [to extract]") {
+        Container(users_svc, "Users Service", "Go · :8083",
+            "Управление учётными\nзаписями пользователей.\n[Планируется к выделению]")
+        ContainerDb(users_db, "Users DB", "PostgreSQL 14",
+            "Таблицы: users")
+    }
+
+    ' Billing Domain (to extract)
+    System_Boundary(billing_domain, "Billing Domain  [to extract]") {
+        Container(payments_svc, "Payments Service", "Go · :8084",
+            "Обработка платежей.\nИнтеграция с внешним\nплатёжным шлюзом.\n[Планируется к выделению]")
+        Container(subscriptions_svc, "Subscriptions Service", "Go · :8085",
+            "Управление подписками\nпользователей.\n[Планируется к выделению]")
+        ContainerDb(billing_db, "Billing DB", "PostgreSQL 14",
+            "Таблицы: payments, subscriptions")
+    }
+
+    ' Events Domain
+    System_Boundary(events_domain, "Events Domain") {
+        Container(events_svc, "Events Service", "Go · :8082",
+            "Публикует и потребляет\nдоменные события.\nProducer + Consumer поверх Kafka.")
+        ContainerQueue(kafka, "Apache Kafka", "Kafka · :9092",
+            "Брокер событий.\nТопики: movie-events,\nuser-events, payment-events")
+        Container(zookeeper, "Zookeeper", "Zookeeper · :2181",
+            "Координатор кластера Kafka")
+        Container(kafka_ui, "Kafka UI", "Web · :8090",
+            "Мониторинг топиков\nи сообщений Kafka")
+    }
+}
+
+' ── Связи: входящий трафик ───────────────────────────────────────
+Rel(client,  ingress, "HTTPS", "cinemaabyss.example.com")
+Rel(ingress, gateway, "HTTP",  "Proxy pass · :8000")
+
+' ── Связи: API Gateway → сервисы ─────────────────────────────────
+Rel(gateway, monolith,   "HTTP", "/api/users · /api/payments\n/api/subscriptions")
+Rel(gateway, movies_svc, "HTTP", "/api/movies\n(% via MOVIES_MIGRATION_PERCENT)")
+Rel(gateway, events_svc, "HTTP", "/api/events")
+
+' ── Связи: БД ────────────────────────────────────────────────────
+Rel(monolith,          shared_db,  "TCP", "SQL (legacy shared schema)")
+Rel(movies_svc,        movies_db,  "TCP", "SQL")
+Rel(users_svc,         users_db,   "TCP", "SQL")
+Rel(payments_svc,      billing_db, "TCP", "SQL")
+Rel(subscriptions_svc, billing_db, "TCP", "SQL")
+
+' ── Связи: Kafka ─────────────────────────────────────────────────
+Rel(events_svc, kafka,     "TCP", "Produce & Consume")
+Rel(kafka,      zookeeper, "TCP", "Coordination")
+Rel(kafka_ui,   kafka,     "TCP", "Admin API")
+
+' ── Связи: внешние системы ───────────────────────────────────────
+Rel(payments_svc, payment_gw, "HTTPS", "Payment API")
+
+' ── Связи: async доменные события ────────────────────────────────
+Rel(movies_svc,   events_svc, "HTTP", "POST /api/events/movie\n(viewed / rated / added)")
+Rel(monolith,     events_svc, "HTTP", "POST /api/events/user\n(registered / logged in)")
+Rel(payments_svc, events_svc, "HTTP", "POST /api/events/payment\n(completed / failed)")
+
+@enduml

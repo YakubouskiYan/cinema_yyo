@@ -1,0 +1,71 @@
+C4Container
+    title CinemaAbyss — To-Be Container Diagram (C4)
+
+    Person(client, "Пользователь", "Web / Mobile клиент")
+
+    System_Boundary(cinema, "CinemaAbyss Platform") {
+
+        Container(gateway, "API Gateway (Proxy)", "Go · :8000", "Единая точка входа.\nРеализует паттерн Strangler Fig:\nпостепенно переключает трафик\nс монолита на микросервисы\nчерез MOVIES_MIGRATION_PERCENT.")
+
+        System_Boundary(legacy, "Legacy Domain (Monolith · :8080)") {
+            Container(monolith, "Monolith", "Go", "Временный legacy-сервис.\nОбслуживает: Users, Payments, Subscriptions\nпока соответствующие домены не выделены.\nПостепенно выводится из эксплуатации.")
+        }
+
+        System_Boundary(movies_domain, "Movies Domain") {
+            Container(movies_svc, "Movies Service", "Go · :8081", "Метаданные фильмов: каталог,\nжанры, рейтинги, постеры.\nПервый извлечённый микросервис.")
+            ContainerDb(movies_db, "Movies DB", "PostgreSQL 14", "Таблицы: movies, movie_genres,\nuser_ratings, views")
+        }
+
+        System_Boundary(users_domain, "Users Domain  [to extract]") {
+            Container(users_svc, "Users Service", "Go · :8083", "Управление учётными\nзаписями пользователей.\n[Планируется к выделению из монолита]")
+            ContainerDb(users_db, "Users DB", "PostgreSQL 14", "Таблицы: users")
+        }
+
+        System_Boundary(billing_domain, "Billing Domain  [to extract]") {
+            Container(payments_svc, "Payments Service", "Go · :8084", "Обработка платежей.\nИнтеграция с внешним\nплатёжным шлюзом.\n[Планируется к выделению]")
+            Container(subscriptions_svc, "Subscriptions Service", "Go · :8085", "Управление подписками\nпользователей.\n[Планируется к выделению]")
+            ContainerDb(billing_db, "Billing DB", "PostgreSQL 14", "Таблицы: payments, subscriptions")
+        }
+
+        System_Boundary(events_domain, "Events Domain") {
+            Container(events_svc, "Events Service", "Go · :8082", "Публикует и потребляет\nдоменные события.\nProducer + Consumer поверх Kafka.")
+            ContainerQueue(kafka, "Apache Kafka", "Kafka · :9092", "Брокер событий.\nТопики:\n• movie-events\n• user-events\n• payment-events")
+            Container(zookeeper, "Zookeeper", "Zookeeper · :2181", "Координатор кластера Kafka")
+        }
+
+        ContainerDb(shared_db, "Shared PostgreSQL", "PostgreSQL 14 · :5432", "Текущая общая БД монолита.\nВ целевом состоянии каждый\nсервис получит свою схему/БД.")
+
+        Container(kafka_ui, "Kafka UI", "Web · :8090", "Мониторинг топиков\nи сообщений Kafka")
+    }
+
+    System_Ext(payment_gw, "Платёжный шлюз", "Внешний процессинг:\nStripe / ЮKassa / etc.")
+
+    %% ── Входящий трафик ──────────────────────────────────────────────
+    Rel(client, gateway, "HTTPS", "REST / JSON")
+
+    %% ── API Gateway → сервисы ────────────────────────────────────────
+    Rel(gateway, monolith,   "HTTP", "/api/users · /api/payments · /api/subscriptions\n(пока сервисы не выделены)")
+    Rel(gateway, movies_svc, "HTTP", "/api/movies\n(% трафика via MOVIES_MIGRATION_PERCENT)")
+    Rel(gateway, events_svc, "HTTP", "/api/events")
+
+    %% ── БД ───────────────────────────────────────────────────────────
+    Rel(monolith,          shared_db, "TCP", "SQL (legacy shared schema)")
+    Rel(movies_svc,        movies_db, "TCP", "SQL")
+    Rel(users_svc,         users_db,  "TCP", "SQL")
+    Rel(payments_svc,      billing_db,"TCP", "SQL")
+    Rel(subscriptions_svc, billing_db,"TCP", "SQL")
+
+    %% ── Kafka ────────────────────────────────────────────────────────
+    Rel(events_svc, kafka,     "TCP", "Produce & Consume")
+    Rel(kafka,      zookeeper, "TCP", "Coordination")
+    Rel(kafka_ui,   kafka,     "TCP", "Admin API")
+
+    %% ── Внешние системы ──────────────────────────────────────────────
+    Rel(payments_svc, payment_gw, "HTTPS", "Payment API")
+
+    %% ── Async события (доменные) ─────────────────────────────────────
+    Rel(movies_svc,        events_svc, "HTTP", "POST /api/events/movie\n(movie viewed / rated / added)")
+    Rel(monolith,          events_svc, "HTTP", "POST /api/events/user\n(user registered / logged in)")
+    Rel(payments_svc,      events_svc, "HTTP", "POST /api/events/payment\n(payment completed / failed)")
+
+    UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
