@@ -16,7 +16,7 @@
     },
     {
       "key": "eventsServiceUrl",
-      "value": "http://127.0.0.1:8082",
+      "value": "http://127.0.0.1:18082",
       "type": "default",
       "enabled": true
     },

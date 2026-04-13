@@ -1,0 +1,298 @@
+{
+  "info": {
+    "name": "CinemaAbyss E2E",
+    "_postman_id": "e2e-cinemaabyss-001",
+    "description": "Сквозные E2E-сценарии через Proxy Service.\n\nПоток: создать пользователя → оформить подписку → добавить фильм → опубликовать событие просмотра → опубликовать событие платежа → проверить всё через GET-запросы.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "E2E: Полный пользовательский сценарий",
+      "item": [
+        {
+          "name": "01. Создать пользователя",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Генерируем уникальный суффикс для всего прогона",
+                  "const suffix = Date.now();",
+                  "pm.environment.set('e2e_suffix', suffix);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('Получен ID пользователя', () => pm.expect(body.id).to.be.above(0));",
+                  "pm.test('Username совпадает', () => {",
+                  "  const suffix = pm.environment.get('e2e_suffix');",
+                  "  pm.expect(body.username).to.eql('e2e_user_' + suffix);",
+                  "});",
+                  "",
+                  "// Сохраняем для последующих шагов",
+                  "pm.environment.set('e2e_user_id', body.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"username\": \"e2e_user_{{e2e_suffix}}\", \"email\": \"e2e_{{e2e_suffix}}@test.com\"}"
+            },
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/users",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "users"]
+            }
+          }
+        },
+        {
+          "name": "02. Оформить подписку для пользователя",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('Получен ID подписки', () => pm.expect(body.id).to.be.above(0));",
+                  "pm.test('Тип плана — premium', () => pm.expect(body.plan_type).to.eql('premium'));",
+                  "pm.test('user_id совпадает', () => {",
+                  "  pm.expect(body.user_id).to.eql(parseInt(pm.environment.get('e2e_user_id')));",
+                  "});",
+                  "",
+                  "pm.environment.set('e2e_subscription_id', body.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"user_id\": {{e2e_user_id}}, \"plan_type\": \"premium\", \"start_date\": \"{{$isoTimestamp}}\", \"end_date\": \"2027-01-01T00:00:00Z\"}"
+            },
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/subscriptions",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "subscriptions"]
+            }
+          }
+        },
+        {
+          "name": "03. Добавить фильм",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('Получен ID фильма', () => pm.expect(body.id).to.be.above(0));",
+                  "pm.test('Название совпадает', () => pm.expect(body.title).to.eql('E2E Test Movie'));",
+                  "pm.test('Рейтинг совпадает', () => pm.expect(body.rating).to.eql(8.5));",
+                  "",
+                  "pm.environment.set('e2e_movie_id', body.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"E2E Test Movie\", \"description\": \"Создан в E2E-тесте\", \"rating\": 8.5, \"genres\": [\"Drama\", \"Thriller\"]}"
+            },
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/movies",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "movies"]
+            }
+          }
+        },
+        {
+          "name": "04. Опубликовать событие просмотра фильма",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('Статус события — success', () => pm.expect(body.status).to.eql('success'));",
+                  "pm.test('event_id сгенерирован', () => pm.expect(body.event.event_id).to.be.a('string').and.not.empty);",
+                  "pm.test('published_at сгенерирован', () => pm.expect(body.event.published_at).to.be.a('string').and.not.empty);",
+                  "pm.test('movie_id совпадает', () => {",
+                  "  pm.expect(body.event.movie_id).to.eql(parseInt(pm.environment.get('e2e_movie_id')));",
+                  "});",
+                  "pm.test('user_id совпадает', () => {",
+                  "  pm.expect(body.event.user_id).to.eql(parseInt(pm.environment.get('e2e_user_id')));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"movie_id\": {{e2e_movie_id}}, \"title\": \"E2E Test Movie\", \"action\": \"viewed\", \"user_id\": {{e2e_user_id}}}"
+            },
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/events/movie",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "events", "movie"]
+            }
+          }
+        },
+        {
+          "name": "05. Опубликовать событие платежа",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('Статус события — success', () => pm.expect(body.status).to.eql('success'));",
+                  "pm.test('event_id сгенерирован', () => pm.expect(body.event.event_id).to.be.a('string').and.not.empty);",
+                  "pm.test('user_id совпадает', () => {",
+                  "  pm.expect(body.event.user_id).to.eql(parseInt(pm.environment.get('e2e_user_id')));",
+                  "});",
+                  "pm.test('Сумма платежа совпадает', () => pm.expect(body.event.amount).to.eql(9.99));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"payment_id\": 0, \"user_id\": {{e2e_user_id}}, \"amount\": 9.99, \"status\": \"completed\", \"method_type\": \"card\"}"
+            },
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/events/payment",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "events", "payment"]
+            }
+          }
+        },
+        {
+          "name": "06. Проверить пользователя (GET by id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('ID совпадает', () => {",
+                  "  pm.expect(body.id).to.eql(parseInt(pm.environment.get('e2e_user_id')));",
+                  "});",
+                  "pm.test('Email содержит суффикс', () => {",
+                  "  const suffix = pm.environment.get('e2e_suffix');",
+                  "  pm.expect(body.email).to.include(suffix);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/users?id={{e2e_user_id}}",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "users"],
+              "query": [{ "key": "id", "value": "{{e2e_user_id}}" }]
+            }
+          }
+        },
+        {
+          "name": "07. Проверить подписку (GET by user_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const subs = pm.response.json();",
+                  "pm.test('Есть хотя бы одна подписка', () => pm.expect(subs).to.have.lengthOf.above(0));",
+                  "pm.test('Тип плана — premium', () => {",
+                  "  const premium = subs.find(s => s.plan_type === 'premium');",
+                  "  pm.expect(premium).to.not.be.undefined;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/subscriptions?user_id={{e2e_user_id}}",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "subscriptions"],
+              "query": [{ "key": "user_id", "value": "{{e2e_user_id}}" }]
+            }
+          }
+        },
+        {
+          "name": "08. Проверить фильм (GET by id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Статус 200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('ID совпадает', () => {",
+                  "  pm.expect(body.id).to.eql(parseInt(pm.environment.get('e2e_movie_id')));",
+                  "});",
+                  "pm.test('Название совпадает', () => pm.expect(body.title).to.eql('E2E Test Movie'));",
+                  "pm.test('Жанры сохранены (2 штуки)', () => pm.expect(body.genres).to.have.lengthOf(2));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{proxyServiceUrl}}/api/movies?id={{e2e_movie_id}}",
+              "host": ["{{proxyServiceUrl}}"],
+              "path": ["api", "movies"],
+              "query": [{ "key": "id", "value": "{{e2e_movie_id}}" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -41,6 +41,11 @@ const argv = yargs(hideBin(process.argv))
     type: 'number',
     default: 10000
   })
+  .option('env-var', {
+    description: 'Override environment variable (key=value), can be repeated',
+    type: 'array',
+    default: []
+  })
   .help()
   .alias('help', 'h')
   .argv;
@@ -77,7 +82,6 @@ const newmanOptions = {
   reporter: {
     htmlextra: {
       export: path.join(reportsDir, `report-${argv.environment}-${new Date().toISOString().replace(/:/g, '-')}.html`),
-      template: 'default',
       showOnlyFails: false,
       noSyntaxHighlighting: false,
       testPaging: true,
@@ -98,6 +102,14 @@ const newmanOptions = {
 // Add folder option if specified
 if (argv.folder) {
   newmanOptions.folder = argv.folder;
+}
+
+// Add env-var overrides if specified
+if (argv['env-var'] && argv['env-var'].length > 0) {
+  newmanOptions.envVar = argv['env-var'].map(pair => {
+    const idx = pair.indexOf('=');
+    return { key: pair.substring(0, idx), value: pair.substring(idx + 1) };
+  });
 }
 
 // Run Newman

@@ -6,8 +6,15 @@
   "scripts": {
     "test": "node run-tests.js",
     "test:local": "node run-tests.js --environment local",
-    "test:docker": "node run-tests.js --environment docker",
-    "test:kubernetes": "node run-tests.js --environment kubernetes"
+    "test:docker": "docker run --rm --network cinemaabyss-network cinemaabyss-api-tests node run-tests.js --environment docker",
+    "test:kubernetes": "node run-tests.js --environment kubernetes",
+    "test:monolith": "node run-tests.js --folder \"Monolith Service\"",
+    "test:movies": "node run-tests.js --folder \"Movies Microservice\"",
+    "test:events": "node run-tests.js --folder \"Events Microservice\" --env-var movieId=1 --env-var userId=1 --env-var paymentId=1",
+    "test:proxy": "node run-tests.js --folder \"Proxy Service\"",
+    "test:e2e": "node run-tests.js --collection CinemaAbyss_E2E --environment local",
+    "test:e2e:docker": "docker run --rm --network cinemaabyss-network cinemaabyss-api-tests node run-tests.js --collection CinemaAbyss_E2E --environment docker",
+    "test:e2e:kubernetes": "node run-tests.js --collection CinemaAbyss_E2E --environment kubernetes"
   },
   "keywords": [
     "postman",
@@ -20,6 +27,7 @@
   "license": "MIT",
   "dependencies": {
     "newman": "^5.3.2",
+    "newman-reporter-htmlextra": "1.22.11",
     "yargs": "^17.6.2"
   }
 }

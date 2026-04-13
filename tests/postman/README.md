@@ -1,122 +1,75 @@
-# CinemaAbyss API Tests
+# Postman / Newman тесты
 
-This directory contains Postman tests for the CinemaAbyss microservices architecture. The tests are designed to be run using Newman, the command-line collection runner for Postman.
+Полная документация по запуску тестов — в [../README.md](../README.md).
 
-## Structure
+## Структура каталога
 
-- `CinemaAbyss.postman_collection.json` - The main Postman collection containing all API tests
-- `local.environment.json` - Environment variables for running tests against locally running services
-- `docker.environment.json` - Environment variables for running tests against services in Docker containers
-- `run-tests.js` - Node.js script to run the tests using Newman
-- `package.json` - Node.js package configuration with dependencies and scripts
+| Файл | Назначение |
+|------|------------|
+| `CinemaAbyss.postman_collection.json` | Основная коллекция тестов (по сервисам) |
+| `CinemaAbyss_E2E.postman_collection.json` | E2E-сценарий сквозного потока через Proxy |
+| `local.environment.json` | Переменные для запуска с хоста (`127.0.0.1:порт`) |
+| `docker.environment.json` | Переменные для запуска внутри Docker-сети (имена контейнеров) |
+| `kubernetes.environment.json` | Переменные для запуска внутри Kubernetes |
+| `run-tests.js` | CLI-скрипт запуска через Newman |
+| `Dockerfile` | Образ для запуска тестов внутри Docker-сети |
+| `reports/` | HTML и JUnit XML отчёты после прогона |
 
-## Test Coverage
+## Где запускать каждое окружение
 
-The tests cover the following services:
+| Скрипт | Где запускать | Как резолвятся хосты |
+|--------|---------------|----------------------|
+| `test:local` | Хост | `127.0.0.1:порт` — пробрасываемые порты Docker |
+| `test:docker` | Внутри Docker-сети | `monolith:8080` — Docker DNS |
+| `test:kubernetes` | Pod внутри кластера | Kubernetes Service DNS |
 
-1. **Monolith Service**
-   - User management (create, get)
-   - Movie management (create, get)
-   - Payment processing (create, get)
-   - Subscription management (create, get)
+> **Важно:** `test:docker` использует имена контейнеров (`monolith`, `movies-service` и т.д.),
+> которые разрешаются только внутри Docker-сети. С хоста используйте `test:local`.
 
-2. **Movies Microservice**
-   - Health check
-   - Movie management (create, get)
+## Запуск
 
-3. **Events Microservice**
-   - Health check
-   - Event publishing (movie, user, payment events)
-
-4. **Proxy Service**
-   - Health check
-   - Proxying requests to other services
-
-## Prerequisites
-
-- Node.js (v14 or later)
-- npm (v6 or later)
-
-## Installation
+### С хоста (сервисы запущены через Docker Compose)
 
 ```bash
-# Navigate to the tests directory
-cd tests/postman
-
-# Install dependencies
 npm install
+npm run test:local
 ```
 
-## Running Tests
-
-### Basic Usage
+### Внутри Docker-сети
 
 ```bash
-# Run all tests against the local environment (default)
-npm test
+# Собрать образ (один раз)
+docker build -t cinemaabyss-api-tests .
 
-# Run all tests against the Docker environment
-npm run test:docker
+# Запустить тесты в сети docker compose
+docker run --rm --network cinemaabyss-network cinemaabyss-api-tests \
+  node run-tests.js --environment docker
 ```
 
-### Running Specific Test Folders
+### E2E сценарий
 
 ```bash
-# Run only Monolith Service tests
+# С хоста
+npm run test:e2e
+
+# Внутри Docker-сети
+npm run test:e2e:docker
+
+# Внутри Kubernetes
+npm run test:e2e:kubernetes
+```
+
+### Отдельная группа тестов
+
+```bash
 npm run test:monolith
-
-# Run only Movies Microservice tests
 npm run test:movies
-
-# Run only Events Microservice tests
 npm run test:events
-
-# Run only Proxy Service tests
 npm run test:proxy
 ```
 
-### Advanced Usage
+## Отчёты
 
-The `run-tests.js` script supports several command-line options:
-
-```bash
-node run-tests.js --environment <env> --folder <folder> --reporters <reporters> --bail --timeout <ms>
-```
-
-Options:
-- `--environment`, `-e`: Environment to run tests against (default: 'local')
-- `--collection`, `-c`: Collection to run (default: 'CinemaAbyss')
-- `--folder`, `-f`: Specific folder in the collection to run
-- `--reporters`, `-r`: Reporters to use, comma-separated (default: 'cli,htmlextra,junit')
-- `--bail`, `-b`: Stop on first error (default: false)
-- `--timeout`, `-t`: Request timeout in ms (default: 10000)
-
-Example:
-```bash
-node run-tests.js --environment docker --folder "Movies Microservice" --reporters cli,htmlextra --bail
-```
-
-## Test Reports
-
-After running the tests, HTML and JUnit XML reports will be generated in the `reports` directory. These reports can be used for CI/CD integration and documentation.
-
-## CI/CD Integration
-
-These tests can be integrated into CI/CD pipelines. Here's an example of how to run them in a GitHub Actions workflow:
-
-```yaml
-- name: Run API Tests
-  run: |
-    cd tests/postman
-    npm install
-    npm run test:docker
-```
-
-## Troubleshooting
-
-If you encounter issues running the tests:
-
-1. Ensure all services are running and accessible
-2. Check the environment configuration in the environment JSON files
-3. Verify that the API endpoints match those in the collection
-4. Increase the timeout value if requests are timing out
+После каждого прогона в `reports/` создаются:
+- `report-<env>-<timestamp>.html` — HTML-отчёт
+- `junit-report-<env>-<timestamp>.xml` — JUnit XML для CI
