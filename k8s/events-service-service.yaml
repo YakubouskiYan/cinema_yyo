@@ -9,8 +9,8 @@ metadata:
   name: events-service
 spec:
   ports:
-    - name: "18082"
-      port: 18082
+    - name: "8082"
+      port: 8082
       targetPort: 8082
   selector:
     io.kompose.service: events-service

@@ -13,7 +13,7 @@
 #
 #   3. Log in and register the repository (if private):
 #        argocd login localhost:8080
-#        argocd repo add https://github.com/<YOUR_ORG>/<YOUR_REPO> \
+#        argocd repo add https://github.com/YakubouskiYan/cinema_yyo \
 #          --username <user> --password <PAT>
 #
 # Apply:
@@ -42,7 +42,7 @@ spec:
   # ── Source: Helm chart in this repository ───────────────────────────────────
   source:
     # TODO: replace with your actual GitHub repository URL
-    repoURL: https://github.com/<YOUR_ORG>/<YOUR_REPO>
+    repoURL: https://github.com/YakubouskiYan/cinema_yyo
     # ArgoCD tracks this branch; CI commits new image tags here
     targetRevision: main
     # Path to the Helm chart directory

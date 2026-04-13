@@ -34,7 +34,9 @@ spec:
           livenessProbe:
             exec:
               command:
-                - pg_isready -U postgres
+                - pg_isready
+                - -U
+                - postgres
             failureThreshold: 5
             periodSeconds: 10
             timeoutSeconds: 5

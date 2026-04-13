@@ -3,12 +3,12 @@ name: Docker Build and Push
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'src/**'
       - '.github/workflows/docker-build-push.yml'
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   release:
     types: [published]
 
@@ -294,7 +294,7 @@ jobs:
     name: Update GitOps manifests
     runs-on: ubuntu-latest
     needs: build-scan-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     # Serialize GitOps updates — never cancel in-progress; let them finish
     # to avoid partial manifest state.
     concurrency:
@@ -320,12 +320,19 @@ jobs:
         id: tag
         run: echo "sha_tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      # Replace image tags in Helm values.yaml with the exact commit SHA tag
-      # so ArgoCD deploys exactly what this pipeline built.
-      - name: Update image tags in values.yaml
+      # Replace image tags AND repositories in Helm values.yaml.
+      # Repository is derived from github.repository (lowercase) so the chart
+      # always points to the correct GHCR namespace regardless of who forked it.
+      - name: Update image repositories and tags in values.yaml
         run: |
           VALUES=src/kubernetes/helm/values.yaml
           TAG=${{ steps.tag.outputs.sha_tag }}
+          REPO=ghcr.io/${{ github.repository_owner }}
+          REPO_LC=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')
+          yq e ".monolith.image.repository     = \"${REPO_LC}/cinema_yyo/monolith\""     -i "$VALUES"
+          yq e ".moviesService.image.repository = \"${REPO_LC}/cinema_yyo/movies-service\"" -i "$VALUES"
+          yq e ".proxyService.image.repository  = \"${REPO_LC}/cinema_yyo/proxy-service\""  -i "$VALUES"
+          yq e ".eventsService.image.repository = \"${REPO_LC}/cinema_yyo/events-service\"" -i "$VALUES"
           yq e ".monolith.image.tag      = \"$TAG\"" -i "$VALUES"
           yq e ".moviesService.image.tag  = \"$TAG\"" -i "$VALUES"
           yq e ".proxyService.image.tag   = \"$TAG\"" -i "$VALUES"
