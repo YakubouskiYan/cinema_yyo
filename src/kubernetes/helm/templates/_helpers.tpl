@@ -51,17 +51,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Create the name of the service account to use
-*/}}
-{{- define "cinemaabyss.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "cinemaabyss.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
-{{- end }}
-
-{{/*
 Return the namespace
 */}}
 {{- define "cinemaabyss.namespace" -}}

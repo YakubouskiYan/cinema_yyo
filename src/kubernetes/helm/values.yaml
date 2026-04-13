@@ -4,8 +4,17 @@ global:
   domain: cinemaabyss.example.com
 
 # Image pull secrets
+# Do NOT put real credentials here — this file is committed to git.
+# Create the secret manually before deploying:
+#   kubectl create secret generic dockerconfigjson \
+#     --from-file=.dockerconfigjson=$HOME/.docker/config.json \
+#     --type=kubernetes.io/dockerconfigjson \
+#     -n cinemaabyss
+# Or pass via --set at deploy time (not stored in git):
+#   helm upgrade --install cinemaabyss . \
+#     --set imagePullSecrets.dockerconfigjson="$(cat ~/.docker/config.json | base64 -w0)"
 imagePullSecrets:
-  dockerconfigjson: ewoJImF1dGhzIjogewoJCSJnaGNyLmlvIjogewoJCQkiYXV0aCI6
+  dockerconfigjson: ""
 # Database configuration
 database:
   host: postgres
@@ -160,12 +169,21 @@ zookeeper:
     accessMode: ReadWriteOnce
 
 # Ingress configuration
+# TLS termination happens here: client → HTTPS → Ingress → HTTP → Proxy Service
+# Inside the cluster mTLS is handled by Istio (see istio section below).
 ingress:
   enabled: true
   className: nginx
   annotations:
     kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # cert-manager issues and renews the certificate automatically.
+    # Requires cert-manager + ClusterIssuer "letsencrypt-prod" installed in the cluster.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  tls:
+    - secretName: cinemaabyss-tls
+      hosts:
+        - cinemaabyss.example.com
   hosts:
     - host: cinemaabyss.example.com
       paths:
@@ -173,13 +191,66 @@ ingress:
           pathType: Prefix
           service: proxy-service
           port: 80
-        - path: /api/events
-          pathType: Prefix
-          service: events-service
-          port: 8082
 
 # Application configuration
 config:
   # Strangler Fig configuration
   gradualMigration: "true"
   moviesMigrationPercent: "100"
+
+# Istio integration (requires Istio installed in the cluster)
+# Enables:
+#   - mTLS STRICT between all services inside the namespace
+#   - Circuit Breaker (DestinationRule) per service
+#   - Timeouts & retries (VirtualService) per service
+#
+# Steps to enable:
+#   1. Install Istio in the cluster (istioctl install --set profile=default)
+#   2. Label the namespace for sidecar injection:
+#        kubectl label namespace cinemaabyss istio-injection=enabled
+#   3. Set istio.enabled=true and redeploy:
+#        helm upgrade cinemaabyss . --set istio.enabled=true
+#   4. Restart pods so sidecars are injected:
+#        kubectl rollout restart deployment -n cinemaabyss
+istio:
+  enabled: false
+
+  # mTLS mode for the entire namespace.
+  # STRICT — only mTLS traffic is allowed between pods; plain HTTP is rejected.
+  mtls:
+    mode: STRICT
+
+  # Circuit Breaker for movies-service
+  # Tight limits intentionally: trips visibly under Fortio -c 50 load test.
+  moviesService:
+    circuitBreaker:
+      maxConnections: 1
+      http1MaxPendingRequests: 1
+      maxRequestsPerConnection: 1
+      consecutive5xxErrors: 1
+      interval: 1s
+      baseEjectionTime: 3m
+      maxEjectionPercent: 100
+    virtualService:
+      timeout: 10s
+      retries:
+        attempts: 3
+        perTryTimeout: 3s
+
+  # Circuit Breaker for monolith
+  # More relaxed: monolith handles multiple business domains.
+  monolith:
+    circuitBreaker:
+      maxConnections: 10
+      http1MaxPendingRequests: 10
+      http2MaxRequests: 100
+      maxRequestsPerConnection: 10
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    virtualService:
+      timeout: 15s
+      retries:
+        attempts: 3
+        perTryTimeout: 5s
