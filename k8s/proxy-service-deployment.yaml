@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\Users\Ян\AppData\Local\Microsoft\WinGet\Packages\Kubernetes.kompose_Microsoft.Winget.Source_8wekyb3d8bbwe\kompose.exe convert -o k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    io.kompose.service: proxy-service
+  name: proxy-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: proxy-service
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\Users\Ян\AppData\Local\Microsoft\WinGet\Packages\Kubernetes.kompose_Microsoft.Winget.Source_8wekyb3d8bbwe\kompose.exe convert -o k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        io.kompose.service: proxy-service
+    spec:
+      containers:
+        - env:
+            - name: EVENTS_SERVICE_URL
+              value: http://events-service:8082
+            - name: GRADUAL_MIGRATION
+              value: "true"
+            - name: MONOLITH_URL
+              value: http://monolith:8080
+            - name: MOVIES_MIGRATION_PERCENT
+              value: "50"
+            - name: MOVIES_SERVICE_URL
+              value: http://movies-service:8081
+            - name: PORT
+              value: "8000"
+          image: cinema_yyo-proxy-service:latest
+          imagePullPolicy: Never
+          name: cinemaabyss-proxy-service
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+      restartPolicy: Always

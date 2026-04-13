@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\Users\Ян\AppData\Local\Microsoft\WinGet\Packages\Kubernetes.kompose_Microsoft.Winget.Source_8wekyb3d8bbwe\kompose.exe convert -o k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    io.kompose.service: monolith
+  name: monolith
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: monolith
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\Users\Ян\AppData\Local\Microsoft\WinGet\Packages\Kubernetes.kompose_Microsoft.Winget.Source_8wekyb3d8bbwe\kompose.exe convert -o k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        io.kompose.service: monolith
+    spec:
+      containers:
+        - env:
+            - name: DB_CONNECTION_STRING
+              value: postgres://postgres:postgres_password@postgres:5432/cinemaabyss?sslmode=disable
+            - name: PORT
+              value: "8080"
+          image: cinema_yyo-monolith:latest
+          imagePullPolicy: Never
+          name: cinemaabyss-monolith
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+      restartPolicy: Always

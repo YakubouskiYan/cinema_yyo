@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: C:\Users\Ян\AppData\Local\Microsoft\WinGet\Packages\Kubernetes.kompose_Microsoft.Winget.Source_8wekyb3d8bbwe\kompose.exe convert -o k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    io.kompose.service: kafka-ui
+  name: kafka-ui
+spec:
+  ports:
+    - name: "18090"
+      port: 18090
+      targetPort: 8080
+  selector:
+    io.kompose.service: kafka-ui

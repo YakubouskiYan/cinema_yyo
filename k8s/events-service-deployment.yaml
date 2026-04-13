@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\Users\Ян\AppData\Local\Microsoft\WinGet\Packages\Kubernetes.kompose_Microsoft.Winget.Source_8wekyb3d8bbwe\kompose.exe convert -o k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    io.kompose.service: events-service
+  name: events-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: events-service
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\Users\Ян\AppData\Local\Microsoft\WinGet\Packages\Kubernetes.kompose_Microsoft.Winget.Source_8wekyb3d8bbwe\kompose.exe convert -o k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        io.kompose.service: events-service
+    spec:
+      containers:
+        - env:
+            - name: KAFKA_BROKERS
+              value: kafka:9092
+            - name: PORT
+              value: "8082"
+          image: cinema_yyo-events-service:latest
+          imagePullPolicy: Never
+          name: cinemaabyss-events-service
+          ports:
+            - containerPort: 8082
+              protocol: TCP
+      restartPolicy: Always

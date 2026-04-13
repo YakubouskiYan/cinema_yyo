@@ -1,0 +1,139 @@
+# =============================================================================
+# Istio Circuit Breaker & Traffic Management — CinemaAbyss
+# =============================================================================
+# Prerequisites:
+#   1. Istio installed in istio-system namespace
+#   2. Namespace labeled: kubectl label namespace cinemaabyss istio-injection=enabled
+#   3. All pods restarted so Envoy sidecars are injected
+#
+# Apply:
+#   kubectl apply -f src/kubernetes/circuit-breaker-config.yaml -n cinemaabyss
+#
+# Verify:
+#   kubectl get destinationrule,virtualservice -n cinemaabyss
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# movies-service — DestinationRule (Circuit Breaker)
+# -----------------------------------------------------------------------------
+# Tight connection pool so the circuit breaker trips visibly under Fortio load:
+#   fortio load -c 50 -qps 0 -n 500 http://movies-service:8081/api/movies
+# Expected result: ~80% 503 (upstream_rq_pending_overflow), ~15% 200.
+# -----------------------------------------------------------------------------
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: movies-service-circuit-breaker
+  namespace: cinemaabyss
+spec:
+  host: movies-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        # Maximum simultaneous TCP connections to the upstream host.
+        # Any connection above this limit is rejected immediately → 503.
+        maxConnections: 1
+      http:
+        # Maximum queued HTTP/1.1 requests waiting for a connection.
+        # Requests above this threshold overflow → circuit breaker trips → 503.
+        http1MaxPendingRequests: 1
+        # Close the connection after each request to prevent keep-alive reuse.
+        maxRequestsPerConnection: 1
+    outlierDetection:
+      # Eject host from the load balancing pool after 1 consecutive 5xx error.
+      consecutive5xxErrors: 1
+      # Scanning interval for outlier detection.
+      interval: 1s
+      # Minimum ejection duration (host stays out of pool for at least 3m).
+      baseEjectionTime: 3m
+      # Allow ejecting up to 100% of the hosts (single-replica cluster).
+      maxEjectionPercent: 100
+---
+# -----------------------------------------------------------------------------
+# movies-service — VirtualService (Timeouts & Retries)
+# -----------------------------------------------------------------------------
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: movies-service-vs
+  namespace: cinemaabyss
+spec:
+  hosts:
+  - movies-service
+  http:
+  - name: movies-route
+    # Hard timeout for the entire request.
+    timeout: 10s
+    retries:
+      # Number of retries on transient failures before returning an error.
+      attempts: 3
+      perTryTimeout: 3s
+      # Retry conditions — only retry on safe, idempotent failure types.
+      retryOn: "connect-failure,refused-stream,unavailable,cancelled,retriable-4xx"
+    route:
+    - destination:
+        host: movies-service
+        port:
+          number: 8081
+---
+# -----------------------------------------------------------------------------
+# monolith — DestinationRule (Circuit Breaker)
+# -----------------------------------------------------------------------------
+# Slightly more relaxed than movies-service: the monolith handles multiple
+# business domains (users, payments, subscriptions) so we allow more concurrent
+# connections before tripping. Outlier detection is also more lenient to avoid
+# false positives from occasional slow DB queries.
+# -----------------------------------------------------------------------------
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: monolith-circuit-breaker
+  namespace: cinemaabyss
+spec:
+  host: monolith
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        # Allow up to 10 simultaneous TCP connections.
+        maxConnections: 10
+      http:
+        # Allow up to 10 queued requests before tripping.
+        http1MaxPendingRequests: 10
+        # Limit HTTP/2 concurrency in case Envoy upgrades connections.
+        http2MaxRequests: 100
+        # Keep connections open across requests for efficiency.
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      # Eject after 5 consecutive 5xx errors (more lenient than movies-service).
+      consecutive5xxErrors: 5
+      # Check every 10 seconds.
+      interval: 10s
+      # Eject for at least 30 seconds.
+      baseEjectionTime: 30s
+      # Eject at most 50% of hosts (safety: keep monolith reachable).
+      maxEjectionPercent: 50
+---
+# -----------------------------------------------------------------------------
+# monolith — VirtualService (Timeouts & Retries)
+# -----------------------------------------------------------------------------
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: monolith-vs
+  namespace: cinemaabyss
+spec:
+  hosts:
+  - monolith
+  http:
+  - name: monolith-route
+    # Monolith may do heavier DB operations — give it more time than movies.
+    timeout: 15s
+    retries:
+      attempts: 3
+      perTryTimeout: 5s
+      retryOn: "connect-failure,refused-stream,unavailable,cancelled,retriable-4xx"
+    route:
+    - destination:
+        host: monolith
+        port:
+          number: 8080

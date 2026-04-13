@@ -1,0 +1,83 @@
+CinemaAbyss has been installed!
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Values.global.namespace }}
+
+=== Verify deployment ===
+
+  kubectl get pods -n {{ .Values.global.namespace }}
+
+Wait until all pods are in Running state (postgres and kafka may take 30-60 seconds).
+
+=== Enable access ===
+
+1. Add to /etc/hosts (Linux/Mac) or C:\Windows\System32\drivers\etc\hosts (Windows):
+
+   127.0.0.1  {{ .Values.global.domain }}
+
+2. Start the tunnel (minikube):
+
+   minikube tunnel
+
+=== Test the API ===
+
+  curl http://{{ .Values.global.domain }}/api/movies
+
+Or open in a browser:
+
+  http://{{ .Values.global.domain }}/api/movies
+
+=== Run postman tests ===
+
+  cd tests/postman && npm run test:kubernetes
+
+=== Strangler Fig migration ===
+
+Traffic split is controlled by MOVIES_MIGRATION_PERCENT (currently {{ .Values.config.moviesMigrationPercent }}%).
+To change without reinstalling:
+
+  helm upgrade {{ .Release.Name }} ./src/kubernetes/helm \
+    --namespace {{ .Values.global.namespace }} \
+    --set config.moviesMigrationPercent=50
+
+=== Istio / Circuit Breaker (optional) ===
+
+Install Istio first, then activate Istio resources in the chart:
+
+  # 1. Install Istio
+  helm repo add istio https://istio-release.storage.googleapis.com/charts
+  helm repo update
+  helm install istio-base istio/base -n istio-system --set defaultRevision=default --create-namespace
+  helm install istiod istio/istiod -n istio-system --wait
+  helm install istio-ingressgateway istio/gateway -n istio-system
+
+  # 2. Enable sidecar injection
+  kubectl label namespace {{ .Values.global.namespace }} istio-injection=enabled --overwrite
+  kubectl rollout restart deployment -n {{ .Values.global.namespace }}
+
+  # 3. Apply circuit breaker config (standalone file)
+  kubectl apply -f src/kubernetes/circuit-breaker-config.yaml -n {{ .Values.global.namespace }}
+
+  # OR upgrade the Helm release with Istio resources enabled
+  helm upgrade {{ .Release.Name }} ./src/kubernetes/helm \
+    --namespace {{ .Values.global.namespace }} \
+    --set istio.enabled=true
+
+  # 4. Run Fortio load test
+  kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.25/samples/httpbin/sample-client/fortio-deploy.yaml -n {{ .Values.global.namespace }}
+  FORTIO_POD=$(kubectl get pod -n {{ .Values.global.namespace }} -l app=fortio -o jsonpath='{.items[0].metadata.name}')
+  kubectl exec -n {{ .Values.global.namespace }} $FORTIO_POD -c fortio -- \
+    fortio load -c 50 -qps 0 -n 500 -loglevel Warning http://movies-service:8081/api/movies
+
+  # 5. Check circuit breaker stats
+  kubectl exec -n {{ .Values.global.namespace }} $FORTIO_POD -c istio-proxy -- \
+    pilot-agent request GET stats | grep movies-service | grep pending
+
+=== Uninstall ===
+
+  helm uninstall {{ .Release.Name }} -n {{ .Values.global.namespace }}
+  kubectl delete namespace {{ .Values.global.namespace }}
+
+  # If Istio was installed:
+  istioctl uninstall --purge
+  kubectl delete namespace istio-system

@@ -1,0 +1,110 @@
+# =============================================================================
+# ArgoCD Application — CinemaAbyss
+# =============================================================================
+# Prerequisites:
+#   1. ArgoCD installed in the cluster:
+#        kubectl create namespace argocd
+#        kubectl apply -n argocd \
+#          -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+#
+#   2. (Optional) Expose ArgoCD UI:
+#        kubectl port-forward svc/argocd-server -n argocd 8080:443
+#        # or via LoadBalancer / Ingress
+#
+#   3. Log in and register the repository (if private):
+#        argocd login localhost:8080
+#        argocd repo add https://github.com/<YOUR_ORG>/<YOUR_REPO> \
+#          --username <user> --password <PAT>
+#
+# Apply:
+#   kubectl apply -f src/kubernetes/argocd-app.yaml
+#
+# After applying ArgoCD will:
+#   - Watch src/kubernetes/helm/ in the main branch
+#   - Auto-sync when values.yaml changes (CI pushes new SHA tags)
+#   - Self-heal: revert any manual kubectl changes that diverge from Git
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cinemaabyss
+  namespace: argocd
+  # Cascade-delete all managed resources when this Application is deleted.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/name: cinemaabyss
+    app.kubernetes.io/managed-by: argocd
+
+spec:
+  project: default
+
+  # ── Source: Helm chart in this repository ───────────────────────────────────
+  source:
+    # TODO: replace with your actual GitHub repository URL
+    repoURL: https://github.com/<YOUR_ORG>/<YOUR_REPO>
+    # ArgoCD tracks this branch; CI commits new image tags here
+    targetRevision: main
+    # Path to the Helm chart directory
+    path: src/kubernetes/helm
+    helm:
+      releaseName: cinemaabyss
+      # Production overrides applied on top of values.yaml
+      # (image tags are managed by CI via values.yaml commits, not here)
+      values: |
+        config:
+          gradualMigration: "true"
+          moviesMigrationPercent: "100"
+
+  # ── Destination: local cluster, cinemaabyss namespace ───────────────────────
+  destination:
+    # https://kubernetes.default.svc = the cluster where ArgoCD is installed
+    server: https://kubernetes.default.svc
+    namespace: cinemaabyss
+
+  # ── Sync policy ─────────────────────────────────────────────────────────────
+  syncPolicy:
+    automated:
+      # prune: delete k8s resources that were removed from Git
+      prune: true
+      # selfHeal: revert manual kubectl changes that differ from Git
+      selfHeal: true
+    syncOptions:
+      # Create namespace automatically if it doesn't exist
+      - CreateNamespace=true
+      # Use server-side apply (handles large CRDs better)
+      - ServerSideApply=true
+      # Fail sync if any resource fails, don't partially apply
+      - FailOnSharedResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Keep last 5 deployments in ArgoCD history for rollback
+  revisionHistoryLimit: 5
+
+  # ── Health checks ───────────────────────────────────────────────────────────
+  # ArgoCD uses built-in health checks for Deployment, StatefulSet, Service.
+  # No custom health checks needed for standard k8s resources.
+
+  # ── Ignore differences ──────────────────────────────────────────────────────
+  # Ignore fields that are mutated at runtime and would cause constant OutOfSync.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        # k8s mutates this annotation at apply time → ignore to avoid false OutOfSync
+        - /spec/template/metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/template/metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+    - group: ""
+      kind: Service
+      jsonPointers:
+        # clusterIP and nodePort are assigned by k8s, not in our manifests
+        - /spec/clusterIP
+        - /spec/clusterIPs
