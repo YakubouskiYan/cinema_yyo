@@ -1,222 +1,189 @@
 # Архитектура микросервисов CinemaAbyss
 
-## Обзор.
- В проекте реализована следующая функциональность:
+## Обзор
 
-- Извлечение микросервисов с использованием паттерна Strangler Fig
-- Развертывание в Kubernetes для оркестрации и масштабирования
-- API Gateway для унифицированного доступа к сервисам
-- Архитектура, управляемая событиями, с использованием Kafka
-- CI/CD Pipeline с GitHub Actions
+В проекте реализована следующая функциональность:
+
+- Постепенный вывод микросервисов с использованием паттерна Strangler Fig
+- Развёртывание в Kubernetes с Helm-чартами и GitOps через ArgoCD
+- API Gateway (Proxy Service) как единая точка входа
+- Event-driven архитектура через Kafka
+- Production-grade CI/CD pipeline на GitHub Actions
+
+---
 
 ## Компоненты
 
 ### Монолит
-Исходное монолитное приложение обрабатывает:
 
-- Управление пользователями
-- Метаданные фильмов
-- Платежи
-- Подписки
+Исходное приложение на Go. Обрабатывает домены, которые ещё не вынесены в микросервисы:
 
-Сервис расположен в src/monolith/.
+- Управление пользователями (`/api/users`)
+- Платежи (`/api/payments`)
+- Подписки (`/api/subscriptions`)
+- Фильмы (`/api/movies`) — до завершения миграции
+
+Расположен в `src/monolith/`.
 
 ### Микросервисы
 
 #### Movies Service
-Извлечен из монолита, обрабатывает всю функциональность, связанную с фильмами:
+
+Выделен из монолита, обрабатывает всю функциональность, связанную с фильмами:
 
 - Метаданные фильмов
 - Рейтинги
 - Жанры
 
-Расположен в src/microservices/movies/.
+Расположен в `src/microservices/movies/`.
 
 #### Events Service
-Обрабатывает коммуникацию между сервисами на основе событий с использованием Kafka:
 
-- События фильмов (просмотр, оценка, добавление)
-- События пользователей (регистрация, вход)
-- События платежей (успешные, неудачные)
+Принимает HTTP-запросы на `/api/events/**` и публикует события в Kafka.
 
-Расположен в src/microservices/events/.
+- `POST /api/events/movie` → топик `movie-events`
+- `POST /api/events/user` → топик `user-events`
+- `POST /api/events/payment` → топик `payment-events`
+
+HTTP-контракт (что принимает от клиента) и Kafka-контракт (что публикуется) разделены на уровне модели: `*Request` — входящий DTO, `*Event` — сообщение в топик с дополнительными полями `event_id` и `published_at`, генерируемыми сервисом.
+
+Расположен в `src/microservices/events/`.
 
 #### Proxy Service (API Gateway)
-Реализует функционал для постепенного перехода от монолита к микросервисам:
 
-- Маршрутизация запросов между монолитом и микросервисами
-- Поддержка постепенного перехода с процентной маршрутизацией
-- Действует как фасад для всей системы
+Реализует паттерн Strangler Fig — постепенный переход от монолита к микросервисам:
 
-Расположен в src/microservices/proxy/.
+| Путь | Назначение |
+|---|---|
+| `/api/movies/**` | `migrationPercent`% → Movies Service, остаток → Monolith |
+| `/api/events/**` | Events Service |
+| `/api/users/**` | Monolith |
+| `/api/payments/**` | Monolith |
+| `/api/subscriptions/**` | Monolith |
+
+Расположен в `src/microservices/proxy/`.
+
+---
+
+## Паттерн Strangler Fig
+
+Прокси маршрутизирует трафик через вероятностный split:
+
+```
+MOVIES_MIGRATION_PERCENT=0    → 100 % /api/movies → Monolith
+MOVIES_MIGRATION_PERCENT=50   →  50 % → Movies Service, 50 % → Monolith
+MOVIES_MIGRATION_PERCENT=100  → 100 % → Movies Service
+```
+
+При `GRADUAL_MIGRATION=false` — весь трафик идёт в монолит независимо от `MOVIES_MIGRATION_PERCENT`.
+
+---
 
 ## Инфраструктура
 
 ### Kubernetes
-Манифесты Kubernetes для развертывания всех компонентов расположены в src/kubernetes/.
+
+Манифесты Kubernetes расположены в `src/kubernetes/`. Основной способ деплоя — Helm.
 
 ### Helm Charts
-Charts Helm для упрощения развертывания и управления:
 
-Расположены в src/kubernetes/helm/cinemaabyss/.
+Параметризованный чарт для установки одной командой. Расположен в `src/kubernetes/helm/`.
+Подробности: [src/kubernetes/helm/README.md](src/kubernetes/helm/README.md)
 
-### Kafka
-Расположено в src/kubernetes/kafka/.
+### Порядок развёртывания
+
+Полное руководство: [src/kubernetes/DEPLOY.md](src/kubernetes/DEPLOY.md)
 
 ### CI/CD Pipeline
-GitHub Actions для непрерывной интеграции и развертывания:
 
-- Сборка и тестирование микросервисов
-- Сборка и выгрузка Docker-образов
+Подробное описание всех workflow: [.github/workflows/WORKFLOWS.md](.github/workflows/WORKFLOWS.md)
 
-Расположены в .github/workflows/.
+Главный пайплайн (`docker-build-push.yml`) запускается на push в `main` и Pull Request:
 
+```
+[Тесты + Coverage] ──┐
+                      ├──→ Сборка образов → Trivy scan → GHCR → GitOps PR → ArgoCD → Kubernetes
+[CodeQL SAST]      ──┘          ↓                 ↓
+                           GitHub Security   SBOM (CycloneDX)
+```
 
-## Детали реализации
+Ключевые характеристики:
+- **CodeQL** запускается параллельно с тестами и блокирует сборку при нахождении уязвимостей
+- **Trivy** сканирует собранный образ до push в GHCR — образ с CRITICAL/HIGH CVE не публикуется
+- **GitOps** — обновление `values.yaml` происходит через Pull Request, не прямым push в main
+- **Concurrency control** — параллельные пуши не создают race condition
 
-#### Паттерн Strangler Fig
+---
 
-Реализован через proxy-сервис, который выступает в роли фасада перед монолитом и микросервисами. Он маршрутизирует трафик на основе конфигурации:
+## Запуск локально через Docker Compose
 
-- При включенном фиче-флаге маршрутизирует определенный процент трафика в микросервис
-- При отключенном маршрутизирует весь трафик для определенного домена в соответствующий микросервис
+1. Убедиться что установлены Docker и Docker Compose
 
-Это позволяет осуществлять контролируемый постепенный переход без нарушения работы пользователей.
-
-## Deployment Instructions
-
-### Local Development with Docker Compose
-
-1. Необходимо, чтобы был установлен docker и docker-compose
-
-2. Запускаем сервисы с помощью Docker Compose:
+2. Запустить сервисы:
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 После запуска сервисы доступны:
-- Monolith: http://localhost:8080
-- Movies Service: http://localhost:8081
-- Events Service: http://localhost:8082
-- API Gateway (Proxy): http://localhost:8000
-- Kafka UI: http://localhost:8090
 
-3. Останавливаем сервисы:
+| Сервис | URL |
+|---|---|
+| API Gateway (Proxy) | http://localhost:8000 |
+| Monolith | http://localhost:8080 |
+| Movies Service | http://localhost:8081 |
+| Events Service | http://localhost:18082 |
+| Kafka UI | http://localhost:18090 |
+
+3. Остановить сервисы:
    ```bash
-   docker-compose down -v
+   docker compose down -v
    ```
 
-4. После внесения изменений рестартим:
-
+4. После изменений пересобрать и перезапустить:
    ```bash
-   docker-compose build
-   docker-compose up -d
+   docker compose build && docker compose up -d
    ```
 
-### Kubernetes Deployment
+---
 
-#### Требования
+## Тестирование API
 
-- Kubernetes cluster (v1.19+)
-- Helm (v3.2.0+)
-- kubectl
+Проект включает набор Postman-тестов, запускаемых через Newman.
 
-#### Развертывание
-
-1. Создайте namespace:
-```bash
-kubectl apply -f src/kubernetes/namespace.yaml
-```
-2. Разверните Kafka:
-```bash
-kubectl apply -f src/kubernetes/kafka/kafka.yaml
-```
-3. Разверните базу данных:
-```bash
-kubectl apply -f src/kubernetes/postgres.yaml
-```
-4. Разверните монолит:
-```bash
-kubectl apply -f src/kubernetes/monolith.yaml
-```
-5.Разверните микросервисы:
-```bash
-kubectl apply -f src/kubernetes/movies-service.yaml
-kubectl apply -f src/kubernetes/events-service.yaml
-```
-6. Разверните прокси-сервис:
-```bash
-kubectl apply -f src/kubernetes/proxy-service.yaml
-```
-
-### Развертывание через CI/CD
-Проект включает GitHub Actions для CI/CD:
-
-- Сборка и тестирование: Автоматически собирает и тестирует код при пуше или пул-реквесте.
-- Сборка Docker и выгрузка: Создает Docker-образы и выгружает их в GitHub Container Registry.
-
-Чтобы использовать пайплайн CI/CD:
-
-1. Создайте форк или клонируйте этот репозиторий в свой аккаунт GitHub.
-2. Отправьте изменения в основную ветку для запуска пайплайна CI/CD.
-3. Выполните ручное или автоматическое развертывание (Helm) в локальной среде
-
-## Тестирование API с Postman
-Проект включает комплексный набор тестов Postman, которые можно запускать из командной строки с помощью Newman. 
-
-Тесты проверяют базовую функциональность всех сервисов в архитектуре.
-
-Покрытие тестами
--  сервис: Пользователи, Фильмы, Платежи, Подписки
-- Микросервис фильмов: Проверка работоспособности, Операции с фильмами
-- Микросервис событий: Проверка работоспособности, Публикация событий
-- Прокси-сервис: Проверка работоспособности, Проксирование запросов
+Покрытие:
+- **Monolith** — пользователи, фильмы, платежи, подписки
+- **Movies Service** — health check, операции с фильмами
+- **Events Service** — health check, публикация событий (movie / user / payment)
+- **Proxy Service** — health check, маршрутизация запросов
 
 ### Запуск тестов
 
-#### Предварительные требования
-
-- Node.js (v14 или выше)
-- npm (v6 или выше)
-- Newman (установлен через npm)
-
-#### Установка
-1. Перейдите в директорию тестов
 ```bash
 cd tests/postman
-```
-2. Установите зависимости
-```bash
 npm install
-```
-3. Запуск тестов локально
-```bash
+
+# Локально (прямые порты сервисов)
 npm run test:local
-```
-или
-```bash
+
+# В Docker Compose (через сеть контейнеров)
 npm run test:docker
-```
-4. Запуск тестов с помощью shell-скрипта
-1. Сделайте скрипт исполняемым
-chmod +x run-tests.sh
 
-2. Запустите все тесты
+# В Kubernetes
+npm run test:kubernetes
+```
+
+Подробности: [tests/postman/README.md](tests/postman/README.md)
+
+### Ручная проверка Strangler Fig
+
 ```bash
-./run-tests.sh -e local
+# Текущее поведение (50% → Movies Service)
+curl http://localhost:8000/api/movies
+
+# Изменить процент миграции в docker-compose.yml:
+# MOVIES_MIGRATION_PERCENT: "100"
+# и перезапустить прокси:
+docker compose up -d proxy-service
 ```
-или
-```bash
-./run-tests.sh -d -e docker
-```
 
-### Тестирование деплоя руками
-1. Тестирование с Docker Compose
-
-   Отправьте запросы к API Gateway:
-   ```bash
-   curl http://localhost:8000/api/movies
-   ```
-2. Протестируйте постепенный переход, изменив переменную окружения MOVIES_MIGRATION_PERCENT в файле docker-compose.yml.
-
-3. Проверьте топики Kafka и сообщения через Kafka UI по адресу http://localhost:8090
+Проверить события в Kafka — Kafka UI: http://localhost:8090

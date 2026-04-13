@@ -121,6 +121,9 @@ Thumbs.db
 charts/*/charts/
 charts/*/requirements.lock
 .cache/
+# Helm secret overrides — never commit real credentials
+src/kubernetes/helm/values.secret.yaml
+src/kubernetes/helm/values.*.secret.yaml
 
 # Test coverage
 coverage.txt
