@@ -3,83 +3,445 @@ name: Docker Build and Push
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
       - 'src/**'
       - '.github/workflows/docker-build-push.yml'
+  pull_request:
+    branches: [main]
   release:
     types: [published]
 
+# Cancel in-progress runs for the same ref — prevents race conditions
+# on parallel pushes and stale GitOps updates.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
-  MONOLITH_IMAGE_NAME: ${{ github.repository }}/monolith
-  MOVIES_SERVICE_IMAGE_NAME: ${{ github.repository }}/movies-service
-  EVENTS_SERVICE_IMAGE_NAME: ${{ github.repository }}/events-service
-  PROXY_SERVICE_IMAGE_NAME: ${{ github.repository }}/proxy-service
 
 jobs:
-  build-and-push:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1 — Language-specific tests (Go + Maven) run BEFORE docker build.
+  # matrix: 4 services, 2 languages, all run in parallel.
+  # ────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test / ${{ matrix.service }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: monolith
+            language: go
+            working_dir: src/monolith
+          - service: movies-service
+            language: go
+            working_dir: src/microservices/movies
+          - service: proxy-service
+            language: java
+            working_dir: src/microservices/proxy
+          - service: events-service
+            language: java
+            working_dir: src/microservices/events
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      # ── Go ──────────────────────────────────────────────────────────────────
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.working_dir }}/go.mod
+          cache: true
+
+      - name: Run Go tests with coverage
+        if: matrix.language == 'go'
+        working-directory: ${{ matrix.working_dir }}
+        run: go test ./... -v -race -count=1 -coverprofile=coverage.out
+
+      - name: Upload Go coverage report
+        if: matrix.language == 'go'
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage-${{ matrix.service }}
+          path: ${{ matrix.working_dir }}/coverage.out
+
+      # ── Java / Maven ─────────────────────────────────────────────────────────
+      - name: Set up Java
+        if: matrix.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+
+      # verify lifecycle includes compile + test + package.
+      # -DskipITs=true skips integration tests (Failsafe) but runs unit tests
+      # (Surefire) and the JaCoCo verify/report goals.
+      - name: Run Maven tests
+        if: matrix.language == 'java'
+        working-directory: ${{ matrix.working_dir }}
+        run: mvn -B verify -DskipITs=true --no-transfer-progress
+
+      - name: Upload JUnit test results
+        if: always() && matrix.language == 'java'
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-results-${{ matrix.service }}
+          path: ${{ matrix.working_dir }}/target/surefire-reports/
+          if-no-files-found: ignore
+
+      - name: Upload JaCoCo coverage report
+        if: always() && matrix.language == 'java'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-coverage-${{ matrix.service }}
+          path: ${{ matrix.working_dir }}/target/site/jacoco/
+          if-no-files-found: ignore
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2 — CodeQL SAST. Runs in PARALLEL with tests — no dependency between
+  # them, both need only source code. build-scan-push is blocked until BOTH
+  # test AND codeql pass.
+  #
+  # Why here, not in a separate workflow:
+  #   Building a vulnerable image and then discarding it wastes runner time.
+  #   CodeQL runs on source before any compilation artifact leaves the repo.
+  #   The earlier the catch, the cheaper the fix.
+  # ────────────────────────────────────────────────────────────────────────────
+  codeql:
+    name: CodeQL / ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [java-kotlin, go]
+        # java-kotlin = CodeQL language ID for Java 21 projects
+        # go          = CodeQL language ID for Go modules
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # CodeQL needs to trace actual compilation for Java —
+      # autobuild alone is insufficient for multi-module Maven projects.
+      - name: Set up Java
+        if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended, security-and-quality
+
+      # Build both Maven modules so CodeQL traces all compilation units.
+      # -DskipTests: only .class files needed for analysis, not test results.
+      - name: Build Java services (for CodeQL tracing)
+        if: matrix.language == 'java-kotlin'
+        run: |
+          mvn verify -B --no-transfer-progress -DskipTests \
+            -f src/microservices/proxy/pom.xml
+          mvn verify -B --no-transfer-progress -DskipTests \
+            -f src/microservices/events/pom.xml
+
+      # autobuild works well for Go — runs go build on all detected modules.
+      - name: Autobuild Go services
+        if: matrix.language == 'go'
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql-${{ matrix.language }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 3 — Build image locally → Trivy scan → Push to GHCR.
+  # Runs per-service in parallel; push happens ONLY after Trivy passes.
+  # On pull_request: build + scan only (no push).
+  # ────────────────────────────────────────────────────────────────────────────
+  build-scan-push:
+    name: Build / Scan / Push — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [test, codeql]
+    permissions:
+      contents: read
+      packages: write        # push to GHCR
+      security-events: write # upload SARIF to GitHub Security
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: monolith
+            context: ./src/monolith
+            image_suffix: monolith
+          - service: movies-service
+            context: ./src/microservices/movies
+            image_suffix: movies-service
+          - service: proxy-service
+            context: ./src/microservices/proxy
+            image_suffix: proxy-service
+          - service: events-service
+            context: ./src/microservices/events
+            image_suffix: events-service
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Log in to the Container registry
-        uses: docker/login-action@v2
+      # Skip login on PRs — we only build and scan, never push.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Monolith
-        id: meta-monolith
-        uses: docker/metadata-action@v4
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.MONOLITH_IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image_suffix }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=short
+            type=sha,format=short,prefix=sha-
             type=ref,event=branch
-            latest
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push Monolith Docker image
-        uses: docker/build-push-action@v4
+      # Step 1: build into local Docker daemon — NOT pushed to registry yet.
+      # cache-to fills the GHA cache so the push step below is nearly instant
+      # (all layers are already cached — no redundant rebuild).
+      - name: Build image (local, no push)
+        uses: docker/build-push-action@v5
         with:
-          context: ./src/monolith
-          push: true
-          tags: ${{ steps.meta-monolith.outputs.tags }}
-          labels: ${{ steps.meta-monolith.outputs.labels }}
+          context: ${{ matrix.context }}
+          load: true
+          push: false
+          tags: ${{ matrix.image_suffix }}:scan
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Extract metadata (tags, labels) for Movies Service
-        id: meta-movies
-        uses: docker/metadata-action@v4
+      # Step 2: Trivy scans the local image.
+      # exit-code: 1 → pipeline fails if CRITICAL/HIGH CVEs are found.
+      # ignore-unfixed: true → skip CVEs with no fix yet (reduces noise).
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.20.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.MOVIES_SERVICE_IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=short
-            type=ref,event=branch
-            latest
+          image-ref: ${{ matrix.image_suffix }}:scan
+          format: sarif
+          output: trivy-${{ matrix.image_suffix }}.sarif
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
 
-      - name: Build and push Movies Service Docker image
-        uses: docker/build-push-action@v4
+      # Always upload SARIF (even on failure) so GitHub Security tab shows issues.
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          context: ./src/microservices/movies
+          sarif_file: trivy-${{ matrix.image_suffix }}.sarif
+          category: trivy-${{ matrix.image_suffix }}
+
+      # Step 3: push to GHCR — only if Trivy passed and not a PR.
+      # All layers come from GHA cache (populated in step 1), so this is fast.
+      - name: Push image to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
           push: true
-          tags: ${{ steps.meta-movies.outputs.tags }}
-          labels: ${{ steps.meta-movies.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      
+      # Step 4: generate SBOM in CycloneDX format from the scanned local image.
+      - name: Generate SBOM
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ matrix.image_suffix }}:scan
+          format: cyclonedx
+          output: sbom-${{ matrix.image_suffix }}.cdx.json
+
+      - name: Upload SBOM artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.image_suffix }}
+          path: sbom-${{ matrix.image_suffix }}.cdx.json
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 4 — Update GitOps manifests (Helm values.yaml) with the new SHA tag.
+  # Opens a Pull Request instead of pushing directly to main, giving full
+  # visibility and review control over every deploy. ArgoCD syncs after merge.
+  # Runs only on push to main (not on release, PR, or workflow_dispatch).
+  # ────────────────────────────────────────────────────────────────────────────
+  update-manifests:
+    name: Update GitOps manifests
+    runs-on: ubuntu-latest
+    needs: build-scan-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Serialize GitOps updates — never cancel in-progress; let them finish
+    # to avoid partial manifest state.
+    concurrency:
+      group: gitops-update
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pin yq to a fixed release for reproducibility.
+      - name: Install yq (mikefarah/yq v4.43.1)
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.43.1/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Set SHA tag
+        id: tag
+        run: echo "sha_tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      # Replace image tags in Helm values.yaml with the exact commit SHA tag
+      # so ArgoCD deploys exactly what this pipeline built.
+      - name: Update image tags in values.yaml
+        run: |
+          VALUES=src/kubernetes/helm/values.yaml
+          TAG=${{ steps.tag.outputs.sha_tag }}
+          yq e ".monolith.image.tag      = \"$TAG\"" -i "$VALUES"
+          yq e ".moviesService.image.tag  = \"$TAG\"" -i "$VALUES"
+          yq e ".proxyService.image.tag   = \"$TAG\"" -i "$VALUES"
+          yq e ".eventsService.image.tag  = \"$TAG\"" -i "$VALUES"
+
+      # Opens a PR for the manifest change instead of force-pushing to main.
+      # If no files changed, create-pull-request is a no-op.
+      - name: Create Pull Request for manifest update
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(gitops): update image tags to ${{ steps.tag.outputs.sha_tag }}"
+          branch: gitops/update-${{ steps.tag.outputs.sha_tag }}
+          delete-branch: true
+          title: "chore(gitops): update image tags to ${{ steps.tag.outputs.sha_tag }}"
+          body: |
+            Automated image tag update triggered by [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}).
+
+            Updates all service image tags to `${{ steps.tag.outputs.sha_tag }}`.
+
+            _Merge this PR to deploy the new images via ArgoCD._
+          labels: gitops,automated
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 5 — API integration tests (Newman/Postman).
+  # Runs after images are in GHCR and docker-compose can pull them.
+  # Skipped on pull_request — images are not pushed to GHCR for PRs.
+  # ────────────────────────────────────────────────────────────────────────────
+  api-tests:
+    name: Run API Tests
+    runs-on: ubuntu-latest
+    needs: build-scan-push
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start services with Docker Compose
+        run: docker compose up -d
+
+      # Retry-based readiness checks — no fixed sleep.
+      # Each loop waits up to 5 minutes (30 × 10 s) before failing.
+      - name: Wait for proxy service to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Proxy service is ready"
+              exit 0
+            fi
+            echo "Attempt $i/30: proxy not ready, retrying in 10s..."
+            sleep 10
+          done
+          echo "Proxy service did not become ready in time"
+          docker compose logs proxy-service
+          exit 1
+
+      - name: Wait for movies service to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8081/api/movies/health > /dev/null 2>&1; then
+              echo "Movies service is ready"
+              exit 0
+            fi
+            echo "Attempt $i/30: movies-service not ready, retrying in 10s..."
+            sleep 10
+          done
+          echo "Movies service did not become ready in time"
+          docker compose logs movies-service
+          exit 1
+
+      - name: Wait for events service to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:18082/api/events/health > /dev/null 2>&1; then
+              echo "Events service is ready"
+              exit 0
+            fi
+            echo "Attempt $i/30: events-service not ready, retrying in 10s..."
+            sleep 10
+          done
+          echo "Events service did not become ready in time"
+          docker compose logs events-service
+          exit 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tests/postman/package-lock.json
+
+      - name: Install Newman and dependencies
+        working-directory: tests/postman
+        run: npm install
+
+      - name: Build API tests Docker image
+        working-directory: tests/postman
+        run: docker build -t cinemaabyss-api-tests .
+
+      - name: Run API tests
+        working-directory: tests/postman
+        run: |
+          mkdir -p reports
+          docker run \
+            --network=cinemaabyss-network \
+            -v "$(pwd)/reports:/app/reports" \
+            cinemaabyss-api-tests \
+            node run-tests.js --environment docker
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-reports
+          path: tests/postman/reports/
+
+      - name: Stop services
+        if: always()
+        run: docker compose down

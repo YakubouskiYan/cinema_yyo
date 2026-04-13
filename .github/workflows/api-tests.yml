@@ -1,10 +1,11 @@
-name: API Tests
+name: API Tests (manual / PR)
 
+# This workflow runs API tests in isolation — useful for PRs and manual triggers
+# where docker-build-push.yml hasn't run yet (images already exist in GHCR).
+# On push to main the api-tests job inside docker-build-push.yml takes over.
 on:
-  push:
-    branches: [ main, master ]
   pull_request:
-    branches: [ main, master ]
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
@@ -13,59 +14,66 @@ on:
         default: 'docker'
         type: choice
         options:
-          - local
           - docker
-      test_folder:
-        description: 'Test folder to run (leave empty for all)'
-        required: false
-        type: string
+          - local
 
 jobs:
   api-tests:
     name: Run API Tests
     runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
 
-      - name: Set up Docker Compose
-        run: |
-          docker compose --version
-      
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Start services with Docker Compose
         run: |
           docker compose up -d
-          # Wait for services to be ready
-          echo "Waiting for services to be ready..."
-          sleep 120
-      
+          echo "Waiting for services to initialise..."
+          sleep 90
+
+      - name: Wait for proxy service to be ready
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Proxy service is ready"
+              break
+            fi
+            echo "Attempt $i: not ready yet, waiting 10s..."
+            sleep 10
+          done
+
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          node-version: '20'
+          cache: npm
           cache-dependency-path: tests/postman/package-lock.json
-      
+
       - name: Install Newman and dependencies
         working-directory: tests/postman
         run: npm install
-      
+
+      - name: Build API tests Docker image
+        working-directory: tests/postman
+        run: docker build -t cinemaabyss-api-tests .
+
       - name: Run API tests
         working-directory: tests/postman
         run: |
+          mkdir -p reports
+          docker run \
+            --network=cinemaabyss-network \
+            -v "$(pwd)/reports:/app/reports" \
+            cinemaabyss-api-tests \
+            node run-tests.js --environment ${{ inputs.environment || 'docker' }}
 
-          docker compose up -d
-          # Wait for services to be ready
-          echo "Waiting for services to be ready..."
-          sleep 15
-          # Build the Docker image
-          docker build -t cinemaabyss-api-tests .
-          
-          # Run the tests in Docker
-          docker run --network=cinemaabyss-network -v "$(pwd)/reports:/app/reports" cinemaabyss-api-tests
-        
-      
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-reports
+          path: tests/postman/reports/
+
       - name: Stop services
         if: always()
         run: docker compose down
