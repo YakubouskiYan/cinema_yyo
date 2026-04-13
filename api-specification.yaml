@@ -18,7 +18,7 @@ servers:
     description: Монолитное приложение
   - url: http://localhost:8081
     description: Микросервис фильмов
-  - url: http://localhost:8082
+  - url: http://localhost:18082
     description: Микросервис событий
 
 tags:

@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -176,7 +175,6 @@ func handleMovies(w http.ResponseWriter, r *http.Request) {
 
 func getAllMovies(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query("SELECT id, title, description, rating FROM movies")
-	fmt.Println("get movies from monolith")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
