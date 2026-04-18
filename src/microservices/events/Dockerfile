@@ -10,9 +10,7 @@ RUN mvn dependency:go-offline -B
 COPY src ./src
 RUN mvn package -DskipTests -B
 
-FROM eclipse-temurin:21-jre-alpine
-
-RUN apk --no-cache add ca-certificates
+FROM eclipse-temurin:21-jre-jammy
 
 WORKDIR /app
 
