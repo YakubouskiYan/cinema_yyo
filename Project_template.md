@@ -416,6 +416,10 @@ You can see 21 for the upstream_rq_pending_overflow value which means 21 calls s
 
 Приложите скриншот работы circuit breaker'а
 
+![Fortio load test — Circuit Breaker результат](docs/screenshot/istio_logs_screenshot_1.png)
+
+![Istio stats — upstream_rq_pending_overflow](docs/screenshot/istio_logs_screenshot_2.png)
+
 Удаляем все
 ```bash
 istioctl uninstall --purge
