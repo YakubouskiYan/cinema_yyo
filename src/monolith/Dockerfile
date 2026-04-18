@@ -15,17 +15,12 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o monolith .
 
 # Use a smaller image for the final application
-FROM alpine:latest
+FROM gcr.io/distroless/static-debian12
 
-RUN apk update && apk upgrade --no-cache && apk add --no-cache ca-certificates
+WORKDIR /app
 
-WORKDIR /root/
-
-# Copy the binary from builder
 COPY --from=builder /app/monolith .
 
-# Expose the application port
 EXPOSE 8080
 
-# Command to run the executable
-CMD ["./monolith"]
+CMD ["/app/monolith"]
