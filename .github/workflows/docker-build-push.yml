@@ -140,7 +140,7 @@ jobs:
           cache: maven
 
       - name: Initialise CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           queries: security-extended, security-and-quality
@@ -158,10 +158,10 @@ jobs:
       # autobuild works well for Go — runs go build on all detected modules.
       - name: Autobuild Go services
         if: matrix.language == 'go'
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: codeql-${{ matrix.language }}
 
@@ -200,12 +200,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Skip login on PRs — we only build and scan, never push.
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -213,7 +213,7 @@ jobs:
 
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image_suffix }}
           tags: |
@@ -226,7 +226,7 @@ jobs:
       # cache-to fills the GHA cache so the push step below is nearly instant
       # (all layers are already cached — no redundant rebuild).
       - name: Build image (local, no push)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           load: true
@@ -251,7 +251,7 @@ jobs:
       # Always upload SARIF (even on failure) so GitHub Security tab shows issues.
       - name: Upload Trivy SARIF to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-${{ matrix.image_suffix }}.sarif
           category: trivy-${{ matrix.image_suffix }}
@@ -260,7 +260,7 @@ jobs:
       # All layers come from GHA cache (populated in step 1), so this is fast.
       - name: Push image to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           push: true
