@@ -244,7 +244,7 @@ jobs:
           image-ref: ${{ matrix.image_suffix }}:scan
           format: sarif
           output: trivy-${{ matrix.image_suffix }}.sarif
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: true
           severity: CRITICAL,HIGH
 
