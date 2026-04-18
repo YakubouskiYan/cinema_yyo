@@ -41,7 +41,7 @@ monolith:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/monolith
-    tag: sha-b6f14af
+    tag: sha-ea10f34
     pullPolicy: Always
   replicas: 1
   resources:
@@ -60,7 +60,7 @@ proxyService:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/proxy-service
-    tag: sha-b6f14af
+    tag: sha-ea10f34
     pullPolicy: Always
   replicas: 1
   resources:
@@ -79,7 +79,7 @@ moviesService:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/movies-service
-    tag: sha-b6f14af
+    tag: sha-ea10f34
     pullPolicy: Always
   replicas: 1
   resources:
@@ -98,7 +98,7 @@ eventsService:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/events-service
-    tag: sha-b6f14af
+    tag: sha-ea10f34
     pullPolicy: Always
   replicas: 1
   resources:
