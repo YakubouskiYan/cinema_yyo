@@ -12,6 +12,8 @@ RUN mvn package -DskipTests -B
 
 FROM eclipse-temurin:21-jre-jammy
 
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY --from=builder /app/target/*.jar app.jar
