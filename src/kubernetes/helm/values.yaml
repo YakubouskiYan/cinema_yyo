@@ -2,7 +2,6 @@
 global:
   namespace: cinemaabyss
   domain: cinemaabyss.example.com
-
 # Image pull secrets
 # Do NOT put real credentials here — this file is committed to git.
 # Create the secret manually before deploying:
@@ -37,13 +36,12 @@ database:
     enabled: true
     size: 10Gi
     accessMode: ReadWriteOnce
-
 # Monolith configuration
 monolith:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/monolith
-    tag: latest
+    tag: sha-0cfa608
     pullPolicy: Always
   replicas: 1
   resources:
@@ -57,13 +55,12 @@ monolith:
     port: 8080
     targetPort: 8080
     type: ClusterIP
-
 # Proxy service configuration
 proxyService:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/proxy-service
-    tag: latest
+    tag: sha-0cfa608
     pullPolicy: Always
   replicas: 1
   resources:
@@ -77,13 +74,12 @@ proxyService:
     port: 80
     targetPort: 8000
     type: ClusterIP
-
 # Movies service configuration
 moviesService:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/movies-service
-    tag: latest
+    tag: sha-0cfa608
     pullPolicy: Always
   replicas: 1
   resources:
@@ -97,13 +93,12 @@ moviesService:
     port: 8081
     targetPort: 8081
     type: ClusterIP
-
 # Events service configuration
 eventsService:
   enabled: true
   image:
     repository: ghcr.io/yakubouskiyan/cinema_yyo/events-service
-    tag: latest
+    tag: sha-0cfa608
     pullPolicy: Always
   replicas: 1
   resources:
@@ -117,7 +112,6 @@ eventsService:
     port: 8082
     targetPort: 8082
     type: ClusterIP
-
 # Kafka configuration
 kafka:
   enabled: true
@@ -147,7 +141,6 @@ kafka:
     - name: payment-events
       partitions: 1
       replicationFactor: 1
-
 # Zookeeper configuration
 zookeeper:
   enabled: true
@@ -167,7 +160,6 @@ zookeeper:
     enabled: true
     size: 1Gi
     accessMode: ReadWriteOnce
-
 # Ingress configuration
 # TLS termination happens here: client → HTTPS → Ingress → HTTP → Proxy Service
 # Inside the cluster mTLS is handled by Istio (see istio section below).
@@ -191,13 +183,11 @@ ingress:
           pathType: Prefix
           service: proxy-service
           port: 80
-
 # Application configuration
 config:
   # Strangler Fig configuration
   gradualMigration: "true"
   moviesMigrationPercent: "100"
-
 # Istio integration (requires Istio installed in the cluster)
 # Enables:
 #   - mTLS STRICT between all services inside the namespace
@@ -214,12 +204,10 @@ config:
 #        kubectl rollout restart deployment -n cinemaabyss
 istio:
   enabled: false
-
   # mTLS mode for the entire namespace.
   # STRICT — only mTLS traffic is allowed between pods; plain HTTP is rejected.
   mtls:
     mode: STRICT
-
   # Circuit Breaker for movies-service
   # Tight limits intentionally: trips visibly under Fortio -c 50 load test.
   moviesService:
@@ -236,7 +224,6 @@ istio:
       retries:
         attempts: 3
         perTryTimeout: 3s
-
   # Circuit Breaker for monolith
   # More relaxed: monolith handles multiple business domains.
   monolith:
