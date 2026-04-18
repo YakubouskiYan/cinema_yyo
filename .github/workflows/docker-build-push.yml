@@ -239,7 +239,7 @@ jobs:
       # exit-code: 1 → pipeline fails if CRITICAL/HIGH CVEs are found.
       # ignore-unfixed: true → skip CVEs with no fix yet (reduces noise).
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ matrix.image_suffix }}:scan
           format: sarif
@@ -271,7 +271,7 @@ jobs:
       # Step 4: generate SBOM in CycloneDX format from the scanned local image.
       - name: Generate SBOM
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ matrix.image_suffix }}:scan
           format: cyclonedx
