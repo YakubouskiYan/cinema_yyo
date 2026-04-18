@@ -10,7 +10,7 @@ RUN mvn dependency:go-offline -B
 COPY src ./src
 RUN mvn package -DskipTests -B
 
-FROM gcr.io/distroless/java21-debian12
+FROM eclipse-temurin:21-jre-jammy
 
 WORKDIR /app
 

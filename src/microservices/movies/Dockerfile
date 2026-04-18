@@ -15,12 +15,14 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o movies-service .
 
 # Use a smaller image for the final application
-FROM gcr.io/distroless/static-debian12
+FROM alpine:latest
 
-WORKDIR /app
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
 
 COPY --from=builder /app/movies-service .
 
 EXPOSE 8081
 
-CMD ["/app/movies-service"]
+CMD ["./movies-service"]
